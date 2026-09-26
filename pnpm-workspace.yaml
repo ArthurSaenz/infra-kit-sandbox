@@ -1,0 +1,12 @@
+# A standalone workspace, deliberately NOT a member of the infra-kit root workspace: it is a
+# consumer-shaped fixture, and `infra-kit dev` must see it exactly as it sees hulyo/travelist.
+packages:
+  - apps/*/*
+  - packages/*
+
+# Same as the consumers: per-test copies install in about a second because node_modules is only
+# symlinks into the global store.
+enableGlobalVirtualStore: true
+
+allowBuilds:
+  esbuild: true

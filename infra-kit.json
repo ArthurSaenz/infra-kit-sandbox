@@ -1,0 +1,29 @@
+{
+  "devServersPresets": {
+    "shopLocal": {
+      "apps": {
+        "shop/ui": {
+          "proxy": {
+            "/api": "local"
+          }
+        },
+        "shop/api": {}
+      }
+    },
+    "shopUICloud": {
+      "apps": {
+        "shop/ui": {}
+      }
+    },
+    "adminLocal": {
+      "apps": {
+        "admin/ui": {
+          "proxy": {
+            "/api": "local"
+          }
+        },
+        "admin/api": {}
+      }
+    }
+  }
+}

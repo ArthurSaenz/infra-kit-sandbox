@@ -1,0 +1,22 @@
+{
+  "name": "@pkg/ui-kit",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "vite build"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3",
+    "vite": "8.3.0",
+    "vite-plugin-dts": "^5.1.0"
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "name": "shop-api",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "pnpm exec infra-kit dev --self",
+    "build": "tsc -b"
+  },
+  "dependencies": {
+    "@pkg/lib-core": "workspace:*",
+    "@pkg/types": "workspace:*"
+  },
+  "devDependencies": {
+    "typescript": "^6.0.3"
+  }
+}

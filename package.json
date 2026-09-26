@@ -1,0 +1,25 @@
+{
+  "name": "sandbox-monorepo",
+  "version": "1.0.0",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "build": "pnpm exec turbo run build --env-mode=loose",
+    "dev": "pnpm exec infra-kit dev",
+    "e2e": "pnpm exec vitest run --config e2e/vitest.config.ts"
+  },
+  "devDependencies": {
+    "@slip-stream-kit/config": "link:../infra-kit/apps/infra-kit/config",
+    "@slip-stream-kit/vite": "link:../infra-kit/apps/infra-kit/vite",
+    "@types/node": "^26.5.1",
+    "infra-kit": "link:../infra-kit/apps/infra-kit/cli",
+    "turbo": "2.11.4",
+    "typescript": "^6.0.3",
+    "vitest": "^5.0.0"
+  },
+  "engines": {
+    "node": ">=24.x",
+    "pnpm": ">=11"
+  },
+  "packageManager": "pnpm@12.4.1"
+}

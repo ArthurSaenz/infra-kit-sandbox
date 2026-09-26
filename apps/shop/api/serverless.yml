@@ -1,0 +1,15 @@
+# Only what `infra-kit dev` reads: discovery needs this file to exist, and the local runner mounts
+# every `functions.*.events[].http` route onto `handler` (a dist path + export name).
+service: shop-api
+
+provider:
+  name: aws
+  runtime: nodejs24.x
+
+functions:
+  ping:
+    handler: dist/controllers/ping.handler
+    events:
+      - http:
+          path: ping
+          method: get
