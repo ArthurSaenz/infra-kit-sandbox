@@ -243,12 +243,14 @@ export interface DevRun {
   stop: () => Promise<{ exitCode: number | null; signal: NodeJS.Signals | null; survivors: string[] }>
 }
 
-export const startDev = (copy: SandboxCopy, args: string[]): DevRun => {
+export const startDev = (copy: SandboxCopy, args: string[], options: { cwd?: string } = {}): DevRun => {
   const cli = path.join(copy.root, 'node_modules', 'infra-kit', 'dist', 'cli.js')
+  const cwd = options.cwd ?? copy.root
   // Non-TTY on purpose: it skips the wizard and starts the requested servers directly.
   const child = spawn(process.execPath, [cli, 'dev', ...args], {
-    cwd: copy.root,
-    env: copy.env,
+    cwd,
+    // A shell keeps the logical (unresolved) path in PWD; anything that trusts it must see what a user's would.
+    env: { ...copy.env, PWD: cwd },
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
   })
@@ -342,6 +344,72 @@ export const startDev = (copy: SandboxCopy, args: string[]): DevRun => {
       }
     },
   }
+}
+
+/**
+ * The ready screen prints BEFORE `turbo watch` starts, and turbo watch then runs its own initial build. A
+ * save landing inside that build tests a startup race, not a rebuild — and `tsc -b` can then judge the later
+ * save "up to date" by mtime and never compile it. So wait until the engine's initial pass has reached
+ * `marker` (a `<pkg>:build:` prefix) and its log has gone quiet.
+ */
+export const waitForWatchSettled = async (dev: DevRun, marker: string): Promise<void> => {
+  let lastWatchLog = ''
+  let quietSince = Date.now()
+
+  await waitFor(
+    'turbo watch to finish its initial build',
+    () => {
+      const log = dev.watchLog()
+
+      if (log !== lastWatchLog) {
+        lastWatchLog = log
+        quietSince = Date.now()
+      }
+
+      return log.includes(marker) && Date.now() - quietSince > 2_000 ? true : undefined
+    },
+    60_000,
+  )
+}
+
+/** TCP ports `pid` is listening on. lsof, because it reads the same on macOS and on the Linux CI runner. */
+export const listeningPorts = (pid: number): number[] => {
+  let out = ''
+
+  try {
+    out = execFileSync('lsof', ['-nP', '-a', '-p', String(pid), '-iTCP', '-sTCP:LISTEN', '-Fn'], { encoding: 'utf-8' })
+  } catch {
+    // lsof exits 1 when the process holds no matching socket.
+    return []
+  }
+
+  return out.split('\n').flatMap((line) => {
+    const match = /^n.*:(\d+)$/.exec(line)
+
+    return match ? [Number(match[1])] : []
+  })
+}
+
+/** The port the UI's vite (a descendant of the dev process, via `turbo run dev`) is listening on. */
+export const waitForVitePort = (dev: DevRun, timeoutMs = 90_000): Promise<number> => {
+  return waitFor(
+    'vite to listen',
+    () => {
+      if (dev.child.exitCode != null) {
+        throw new Error(`infra-kit dev exited (${dev.child.exitCode}) before vite was up:\n${dev.output()}`)
+      }
+
+      // The watch engine's `vite build` of a shared lib is a vite process too, just never a listening one.
+      const vites = descendantTree(dev.child.pid!).filter((row) => {
+        return /\bvite(\.js|\.mjs)?(\s|$)/.test(row.command)
+      })
+
+      return vites.flatMap((row) => {
+        return listeningPorts(row.pid)
+      })[0]
+    },
+    timeoutMs,
+  )
 }
 
 export interface PingBody {

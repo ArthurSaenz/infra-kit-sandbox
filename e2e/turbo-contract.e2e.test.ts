@@ -1,9 +1,12 @@
-import { spawn } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
+import fs from 'node:fs'
+import path from 'node:path'
 import process from 'node:process'
 import { afterEach, expect, it } from 'vitest'
 
 // From source, not the built CLI: `dist/` is a minified esbuild bundle that exports only its entry points,
 // so these parsers are unreachable there. The source is what the bundle inlines byte-for-byte.
+import { buildClosureMap, defaultDryRunner } from 'src/dev/dep-closure'
 import { parseTurboDevLine, parseTurboTaskFailure } from 'src/dev/ui-dev'
 
 import { createSandboxCopy, descendantTree, sleep, waitFor } from './harness'
@@ -146,4 +149,103 @@ it('I1: real turbo run dev output parses into per-package lines and a per-packag
 
     expect(survivors, 'turbo processes left behind').toEqual([])
   }
+})
+
+interface Manifest {
+  name: string
+  dependencies?: Record<string, string>
+  devDependencies?: Record<string, string>
+}
+
+/** Every workspace manifest in the copy, by package name, and the dir it lives in. */
+const readWorkspace = (root: string): Map<string, { dir: string; manifest: Manifest }> => {
+  const found = new Map<string, { dir: string; manifest: Manifest }>()
+
+  const appDirs = fs.readdirSync(path.join(root, 'apps')).map((app) => {
+    return path.join('apps', app)
+  })
+
+  for (const parent of ['packages', ...appDirs]) {
+    for (const entry of fs.readdirSync(path.join(root, parent))) {
+      const file = path.join(root, parent, entry, 'package.json')
+
+      if (!fs.existsSync(file)) continue
+
+      const manifest = JSON.parse(fs.readFileSync(file, 'utf-8')) as Manifest
+
+      found.set(manifest.name, { dir: path.join(root, parent, entry), manifest })
+    }
+  }
+
+  return found
+}
+
+/** `pkg` plus its transitive `workspace:` dependencies, straight from the manifests. */
+const declaredClosure = (workspace: Map<string, { manifest: Manifest }>, pkg: string): Set<string> => {
+  const closure = new Set<string>()
+  const queue = [pkg]
+
+  while (queue.length > 0) {
+    const name = queue.shift()!
+
+    if (closure.has(name)) continue
+    closure.add(name)
+
+    const { dependencies = {}, devDependencies = {} } = workspace.get(name)!.manifest
+
+    for (const [dep, spec] of Object.entries({ ...dependencies, ...devDependencies })) {
+      if (spec.startsWith('workspace:')) queue.push(dep)
+    }
+  }
+
+  return closure
+}
+
+it('I2: real `turbo run build --dry=json` closures match the declared workspace graph, and invert into the restart map', async () => {
+  const sandbox = createSandboxCopy()
+
+  copy = sandbox
+  // `buildClosureMap` only maps packages whose dist/ exists, as it would after the runner's boot build.
+  execFileSync('pnpm', ['exec', 'turbo', 'run', 'build', '--env-mode=loose', '--output-logs=errors-only'], {
+    cwd: sandbox.root,
+    env: sandbox.env,
+    stdio: ['ignore', 'ignore', 'pipe'],
+  })
+
+  const workspace = readWorkspace(sandbox.root)
+  const apps = [
+    { name: 'shop', packageName: 'shop-api' },
+    { name: 'admin', packageName: 'admin-api' },
+  ]
+  const dryRunner = defaultDryRunner(sandbox.root)
+
+  for (const app of apps) {
+    const declared = declaredClosure(workspace, app.packageName)
+
+    expect(new Set(await dryRunner(app.packageName)), app.packageName).toEqual(declared)
+    // Guards the fixture: a manifest edit that drops the shared libs would make the equality above vacuous.
+    expect(declared, app.packageName).toEqual(new Set([app.packageName, '@pkg/lib-core', '@pkg/types']))
+  }
+
+  const map = await buildClosureMap(sandbox.root, apps)
+  const expected = new Map<string, Set<string>>()
+
+  for (const app of apps) {
+    for (const pkg of declaredClosure(workspace, app.packageName)) {
+      const { dir } = workspace.get(pkg)!
+
+      if (!dir.startsWith(path.join(sandbox.root, 'packages'))) continue
+
+      const dist = path.join(dir, 'dist')
+      const dependents = expected.get(dist) ?? new Set<string>()
+
+      dependents.add(app.name)
+      expected.set(dist, dependents)
+    }
+  }
+
+  expect(map.dependentsByPackageDir).toEqual(expected)
+  // UI-only libs are built but belong to no backend closure, so a change there restarts nothing.
+  expect(map.packageNameByDir.get(path.join(sandbox.root, 'packages', 'ui-kit', 'dist'))).toBe('@pkg/ui-kit')
+  expect(map.dependentsByPackageDir.has(path.join(sandbox.root, 'packages', 'ui-kit', 'dist'))).toBe(false)
 })

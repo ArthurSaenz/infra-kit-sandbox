@@ -1,6 +1,19 @@
+import fs from 'node:fs'
+import path from 'node:path'
+import process from 'node:process'
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { countMatches, createSandboxCopy, ping, sleep, startDev, waitFor, waitForPing } from './harness'
+import {
+  countMatches,
+  createSandboxCopy,
+  descendantTree,
+  ping,
+  sleep,
+  startDev,
+  waitFor,
+  waitForPing,
+  waitForWatchSettled,
+} from './harness'
 import type { DevRun, PingBody, SandboxCopy } from './harness'
 
 const RESTARTED = /Restarted/
@@ -8,6 +21,7 @@ const STALE = /still serving the OLD/
 const TYPE_ERROR_RESTART =
   /⚠️ {2}Restarted shop:\d+ ● up — @pkg\/lib-core has type errors: src\/version\.ts TS2322 Type 'number' is not assignable to type 'string'\./
 const STILL_STALE_AFTER_REBUILD = /forced rebuild still did not compile/
+const WATCH_ENGINE_DIED = /Watch engine \(`turbo watch build`\) .* — file saves no longer rebuild\./
 /** Well past the runner's 400ms debounce plus a full tsc emit wave, so a second restart would have landed. */
 const QUIET_WINDOW_MS = 5_000
 
@@ -46,36 +60,16 @@ afterEach(async () => {
 })
 
 /** A fresh sandbox copy running `infra-kit dev --watch --target=shop/api`, serving the fixture's v1. */
-const bootShopApi = async (): Promise<Session> => {
+const bootShopApi = async (options: { cwd?: (session: SandboxCopy) => string } = {}): Promise<Session> => {
   const session = createSandboxCopy()
-  const run = startDev(session, ['--watch', '--target=shop/api'])
+  const run = startDev(session, ['--watch', '--target=shop/api'], { cwd: options.cwd?.(session) })
 
   copy = session
   dev = run
 
   await run.waitForPort('shop')
   expect(await ping(session, 'shop')).toEqual({ app: 'shop', lib: 'lib-v1', handler: 'handler-v1' })
-  // The ready screen prints BEFORE `turbo watch` starts, and turbo watch then runs its own initial build.
-  // A save landing inside that build tests a startup race, not a rebuild — and `tsc -b` can then judge the
-  // later save "up to date" by mtime and never compile it. So wait until the engine's initial pass has
-  // reached the app and its log has gone quiet.
-  let lastWatchLog = ''
-  let quietSince = Date.now()
-
-  await waitFor(
-    'turbo watch to finish its initial build',
-    () => {
-      const log = run.watchLog()
-
-      if (log !== lastWatchLog) {
-        lastWatchLog = log
-        quietSince = Date.now()
-      }
-
-      return log.includes('shop-api:build:') && Date.now() - quietSince > 2_000 ? true : undefined
-    },
-    60_000,
-  )
+  await waitForWatchSettled(run, 'shop-api:build:')
 
   const restarts = (): number => {
     return countMatches(run.runnerLog(), RESTARTED)
@@ -213,5 +207,58 @@ describe('infra-kit dev --watch against the sandbox (real turbo, tsc, fastify)',
     expect(countMatches(log, STALE), log).toBe(0)
     expect(countMatches(log, STILL_STALE_AFTER_REBUILD), log).toBe(0)
     expect(await ping(shop.copy, 'shop'), 'served after the burst settled').toMatchObject({ lib: 'lib-burst-10' })
+  })
+
+  it('I7: an externally killed `turbo watch` engine is reported once, and the server keeps serving', async () => {
+    const shop = await bootShopApi()
+    const engine = descendantTree(shop.dev.child.pid!).find((row) => {
+      return row.command.includes('turbo watch build') && row.pid === row.pgid
+    })
+
+    expect(engine, 'the `turbo watch build` process-group leader under the dev process').toBeDefined()
+    process.kill(-engine!.pgid, 'SIGKILL')
+
+    await waitFor(
+      'the watch-engine death warning',
+      () => {
+        return WATCH_ENGINE_DIED.test(shop.dev.runnerLog()) ? true : undefined
+      },
+      30_000,
+    )
+    await sleep(QUIET_WINDOW_MS)
+
+    const log = shop.dev.runnerLog()
+
+    expect(countMatches(log, WATCH_ENGINE_DIED), log).toBe(1)
+    expect(shop.dev.child.exitCode, log).toBeNull()
+    expect(await ping(shop.copy, 'shop')).toEqual({ app: 'shop', lib: 'lib-v1', handler: 'handler-v1' })
+  })
+
+  // The runner's `monorepoRoot` comes from cwd un-realpath'd while the module-generation root is realpath'd;
+  // started from a symlink, the two can disagree and every reload would be judged stale.
+  it('I8: started from a symlinked path, edits through the link and through the real path each restart clean', async () => {
+    const link = (session: SandboxCopy): string => {
+      const linkPath = path.join(session.base, 'sandbox-link')
+
+      fs.symlinkSync(session.root, linkPath)
+
+      return linkPath
+    }
+    const shop = await bootShopApi({ cwd: link })
+    const linkRoot = path.join(shop.copy.base, 'sandbox-link')
+
+    fs.writeFileSync(path.join(linkRoot, LIB_VERSION_FILE), libVersionSource('lib-v2'))
+
+    await shop.waitForShop((body) => {
+      return body.lib === 'lib-v2'
+    })
+    await shop.expectRestarts(1)
+
+    shop.copy.write(LIB_VERSION_FILE, libVersionSource('lib-v3'))
+
+    await shop.waitForShop((body) => {
+      return body.lib === 'lib-v3'
+    })
+    await shop.expectRestarts(2)
   })
 })
