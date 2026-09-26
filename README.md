@@ -35,6 +35,9 @@ pnpm run e2e
 Needs a portless daemon serving HTTPS on :443 (`infra-kit dev` refuses to start without one; `infra-kit
 doctor` prints the one-time install). It is only probed; every write goes to a temp dir.
 
+CI (`.github/workflows/e2e.yml`) runs the suite on every push/PR and weekly against infra-kit `main`, checked out
+as a sibling, with portless installed as a systemd service via `sudo`.
+
 Each test copies the sandbox (minus `node_modules`, `dist`, `.turbo`, `e2e`) to a temp dir, commits it to
 a fresh git repo (turbo watch tracks git-visible sources), and runs `pnpm install --offline
 --frozen-lockfile` there — cheap, because `enableGlobalVirtualStore` makes node_modules symlinks into the
