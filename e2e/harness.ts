@@ -92,11 +92,6 @@ const isolatedEnv = (base: string): NodeJS.ProcessEnv => {
   for (const key of Object.keys(env)) {
     if (key.startsWith('DOPPLER_') || key.startsWith('INFRA_KIT_') || key.startsWith('npm_')) delete env[key]
   }
-  // The suite models a developer's terminal. Under GITHUB_ACTIONS turbo switches to grouped `::group::` output
-  // with no `<pkg>:<task>:` line prefixes, which is not what `infra-kit dev` parses on a dev machine.
-  delete env.CI
-  delete env.GITHUB_ACTIONS
-
   for (const dir of ['home', 'cache', 'portless']) fs.mkdirSync(path.join(base, dir), { recursive: true })
 
   return {

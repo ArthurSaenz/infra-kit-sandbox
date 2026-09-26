@@ -56,6 +56,7 @@ it('I1: real turbo run dev output parses into per-package lines and a per-packag
       '--only',
       '--continue=dependencies-successful',
       '--output-logs=new-only',
+      '--log-order=stream',
       '--no-update-notifier',
       '--ui=stream',
     ],
